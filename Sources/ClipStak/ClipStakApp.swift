@@ -9,6 +9,8 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let bezel = BezelPanel()
     private var statusItem: NSStatusItem!
     private var watcher: Timer?
+    private var saveRetry: Timer?
+    private var warnedSaveFailure = false
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
     private var bezelVisible = false
@@ -19,6 +21,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var historyURL: URL {
         supportURL.appendingPathComponent("history.json")
     }
+    private lazy var history = HistoryPersistence(url: historyURL)
     private var uncleanURL: URL {
         supportURL.appendingPathComponent("unclean")
     }
@@ -56,8 +59,9 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        try? store.save(to: historyURL)
-        try? FileManager.default.removeItem(at: uncleanURL)
+        if persist() {
+            try? FileManager.default.removeItem(at: uncleanURL)
+        }
         if lockFD >= 0 { close(lockFD) }
     }
 
@@ -71,7 +75,12 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func loadHistory() {
         if FileManager.default.fileExists(atPath: historyURL.path) {
-            store = ClipStore.load(from: historyURL)
+            store = history.load()
+            if history.backupURL != nil {
+                notify("Unreadable history was preserved. A new history was started.")
+            } else if !history.canSave {
+                notify("History could not be read and is not being saved.")
+            }
             return
         }
         guard !FileManager.default.fileExists(atPath: importedURL.path) else { return }
@@ -83,13 +92,35 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
            let flyStore = root["store"] as? [String: Any] {
             let clips = ClipStore.importingFlycutStore(flyStore)
             store = ClipStore(clips: clips)
-            try? store.save(to: historyURL)
+            guard persist() else { return }
         }
         FileManager.default.createFile(atPath: importedURL.path, contents: Data())
     }
 
-    private func persist() {
-        try? store.save(to: historyURL)
+    @discardableResult
+    private func persist() -> Bool {
+        if history.save(store) {
+            saveRetry?.invalidate()
+            saveRetry = nil
+            if warnedSaveFailure {
+                warnedSaveFailure = false
+                statusItem?.button?.toolTip = "ClipStak — hold ⇧⌘V, release to paste"
+                notify("Clipboard history is being saved again.")
+            }
+            return true
+        }
+        statusItem?.button?.toolTip = "ClipStak — history is not being saved"
+        if !warnedSaveFailure {
+            warnedSaveFailure = true
+            notify("Clipboard history is not being saved. Check available disk space and permissions.")
+        }
+        if history.canSave, saveRetry == nil {
+            saveRetry = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
+                self?.saveRetry = nil
+                self?.persist()
+            }
+        }
+        return false
     }
 
     private func installTerminationHandler() {
@@ -116,7 +147,9 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.isVisible = true
         statusItem.button?.image = StatusIcon.image(paused: store.paused)
         statusItem.button?.imageScaling = .scaleProportionallyDown
-        statusItem.button?.toolTip = "ClipStak — hold ⇧⌘V, release to paste"
+        statusItem.button?.toolTip = history.canSave && history.lastError == nil
+            ? "ClipStak — hold ⇧⌘V, release to paste"
+            : "ClipStak — history is not being saved"
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -131,6 +164,12 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if history.lastError != nil {
+            let warning = NSMenuItem(title: "History is not being saved", action: nil, keyEquivalent: "")
+            warning.isEnabled = false
+            menu.addItem(warning)
+            menu.addItem(.separator())
+        }
         let hint = NSMenuItem(title: "Hold ⇧⌘V, release to paste", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
@@ -354,10 +393,18 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             hideBezel()
             return
         }
+        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         suppressPaste = true
         hideBezel()
         writeToPasteboard(text)
+        let expectedChangeCount = NSPasteboard.general.changeCount
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard ClipboardPolicy.canCompletePaste(
+                expectedChangeCount: expectedChangeCount,
+                currentChangeCount: NSPasteboard.general.changeCount,
+                targetPID: targetPID,
+                frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier
+            ) else { return }
             postCommandV()
         }
     }
@@ -378,6 +425,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if count == lastCount { return }
             lastCount = count
             if count == self.ownChangeCount { return }
+            guard ClipboardPolicy.shouldCapture(types: pasteboard.types?.map(\.rawValue) ?? []) else { return }
             guard let text = pasteboard.string(forType: .string) else { return }
             let front = NSWorkspace.shared.frontmostApplication
             let result = self.store.record(

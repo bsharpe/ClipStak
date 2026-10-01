@@ -118,9 +118,79 @@ final class ClipStoreTests: XCTestCase {
         store.sticky = true
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("clipstak-test-\(UUID().uuidString).json")
         try store.save(to: url)
-        let loaded = ClipStore.load(from: url)
+        let loaded = try ClipStore.load(from: url)
         XCTAssertEqual(loaded, store)
+        XCTAssertEqual(HistoryPersistence(url: url).load(), store)
         try FileManager.default.removeItem(at: url)
+    }
+
+    func testConcealedAndTransientClipboardEntriesAreNotCaptured() {
+        XCTAssertFalse(ClipboardPolicy.shouldCapture(types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"]))
+        XCTAssertFalse(ClipboardPolicy.shouldCapture(types: ["public.utf8-plain-text", "org.nspasteboard.TransientType"]))
+        XCTAssertTrue(ClipboardPolicy.shouldCapture(types: ["public.utf8-plain-text"]))
+    }
+
+    func testUnreadableHistoryIsPreservedBeforeAReplacementIsSaved() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clipstak-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let original = Data("not valid JSON".utf8)
+        try original.write(to: url)
+
+        let persistence = HistoryPersistence(url: url)
+        XCTAssertTrue(persistence.load().clips.isEmpty)
+        let backupURL = try XCTUnwrap(persistence.backupURL)
+        XCTAssertEqual(try Data(contentsOf: backupURL), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        var store = ClipStore()
+        XCTAssertEqual(store.record(text: "new clip", appName: "", bundlePath: nil, at: date(1)), .recorded)
+        XCTAssertTrue(persistence.save(store))
+        XCTAssertEqual(try ClipStore.load(from: url).clips.map(\.text), ["new clip"])
+        XCTAssertEqual(try Data(contentsOf: backupURL), original)
+    }
+
+    func testFailedHistorySaveIsReportedAndCanBeRetried() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clipstak-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let parent = directory.appendingPathComponent("blocked")
+        try Data().write(to: parent)
+        let persistence = HistoryPersistence(url: parent.appendingPathComponent("history.json"))
+        var store = ClipStore()
+        XCTAssertEqual(store.record(text: "keep me", appName: "", bundlePath: nil, at: date(1)), .recorded)
+
+        XCTAssertFalse(persistence.save(store))
+        XCTAssertNotNil(persistence.lastError)
+        try FileManager.default.removeItem(at: parent)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        XCTAssertTrue(persistence.save(store))
+        XCTAssertNil(persistence.lastError)
+        XCTAssertEqual(try ClipStore.load(from: persistence.url).clips.map(\.text), ["keep me"])
+    }
+
+    func testHistoryThatCannotBeReadIsLeftInPlaceAndBlocksSaving() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clipstak-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        let persistence = HistoryPersistence(url: url)
+        XCTAssertTrue(persistence.load().clips.isEmpty)
+        XCTAssertFalse(persistence.canSave)
+        XCTAssertNotNil(persistence.lastError)
+        XCTAssertNil(persistence.backupURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertFalse(persistence.save(ClipStore()))
+    }
+
+    func testPendingPasteRequiresTheSameAppAndClipboardContents() {
+        XCTAssertTrue(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: 100, frontmostPID: 100))
+        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 5, targetPID: 100, frontmostPID: 100))
+        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: 100, frontmostPID: 101))
+        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: nil, frontmostPID: nil))
     }
 
     func testFlycutHistoryImportsNewestFirstAndSkipsNonText() {
