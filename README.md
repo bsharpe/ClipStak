@@ -19,6 +19,10 @@ The release is an Apple silicon app for macOS 14 or later. It is not notarized.
 
 History is kept in `~/Library/Application Support/ClipStak/history.json`. The menu shows the last 10 clips. Option-click the icon, or choose Pause Capture, before copying a password. Sticky Bezel, in the menu, keeps the card up until you press Return or Esc.
 
+Text and copied PNG/TIFF images share a history of up to 40 clips. Images have thumbnails in the menu and bezel, with their pixel dimensions shown in the menu. They paste into apps that accept images. Existing text history loads automatically, and concealed or transient clipboard entries are skipped.
+
+Images are saved as private PNG files in `~/Library/Application Support/ClipStak/images/`. Each image is limited to 40 megapixels and 10 MiB after conversion to PNG; incoming image data is limited to 64 MiB. The app drops the oldest clips when image history exceeds 100 MiB. Deleting or clearing clips removes unused image files. If a malformed history file has been preserved for recovery, its image files are kept until that backup is removed.
+
 Quit ClipStak from the menu and it stays quit. Opening the app again starts it. A crash does not start it again unless you add the login agent below.
 
 ## Start at login

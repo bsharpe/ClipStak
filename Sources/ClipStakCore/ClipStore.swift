@@ -1,16 +1,51 @@
 import Foundation
 
 public struct Clip: Codable, Equatable, Sendable {
-    public var text: String
+    public var content: ClipContent
+    /// Text convenience accessor. Use content to distinguish image clips, which return an empty string here.
+    public var text: String {
+        get {
+            if case .text(let text) = content { return text }
+            return ""
+        }
+        set { content = .text(newValue) }
+    }
+    public var image: ClipImage? {
+        if case .image(let image) = content { return image }
+        return nil
+    }
     public var appName: String
     public var bundlePath: String?
     public var copiedAt: Date
 
     public init(text: String, appName: String, bundlePath: String?, copiedAt: Date) {
-        self.text = text
+        self.init(content: .text(text), appName: appName, bundlePath: bundlePath, copiedAt: copiedAt)
+    }
+
+    public init(content: ClipContent, appName: String, bundlePath: String?, copiedAt: Date) {
+        self.content = content
         self.appName = appName
         self.bundlePath = bundlePath
         self.copiedAt = copiedAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case content, text, appName, bundlePath, copiedAt }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        content = try values.decodeIfPresent(ClipContent.self, forKey: .content)
+            ?? .text(values.decode(String.self, forKey: .text))
+        appName = try values.decode(String.self, forKey: .appName)
+        bundlePath = try values.decodeIfPresent(String.self, forKey: .bundlePath)
+        copiedAt = try values.decode(Date.self, forKey: .copiedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(content, forKey: .content)
+        try values.encode(appName, forKey: .appName)
+        try values.encodeIfPresent(bundlePath, forKey: .bundlePath)
+        try values.encode(copiedAt, forKey: .copiedAt)
     }
 }
 
@@ -20,6 +55,7 @@ public struct ClipStore: Equatable {
     public static let menuPreviewLength = 40
     public static let bezelPreviewLength = 2000
     public static let maxClipLength = 1_000_000
+    public static let maxImageHistoryBytes = 100 * 1024 * 1024
 
     public private(set) var clips: [Clip]
     /// 0 is the newest clip. Esc leaves this where it was so the next gesture resumes.
@@ -33,6 +69,7 @@ public struct ClipStore: Equatable {
         self.index = clips.isEmpty ? 0 : min(max(0, index), clips.count - 1)
         self.sticky = sticky
         self.paused = paused
+        trimToLimits()
     }
 
     public enum RecordResult: Equatable {
@@ -43,22 +80,34 @@ public struct ClipStore: Equatable {
     /// Newest lands at index 0. An empty clip, or one large enough to stall the UI, is ignored.
     /// The same text as the current newest clip does not grow history. An older duplicate moves to the front.
     public mutating func record(text: String, appName: String, bundlePath: String?, at date: Date) -> RecordResult {
-        if paused || text.isEmpty || text.count > Self.maxClipLength {
+        record(content: .text(text), appName: appName, bundlePath: bundlePath, at: date)
+    }
+
+    public mutating func record(content: ClipContent, appName: String, bundlePath: String?, at date: Date) -> RecordResult {
+        guard !paused else { return .ignored }
+        if case .text(let text) = content, text.isEmpty || text.count > Self.maxClipLength { return .ignored }
+        if clips.first?.content == content {
             return .ignored
         }
-        if clips.first?.text == text {
-            return .ignored
-        }
-        let clip = Clip(text: text, appName: appName, bundlePath: bundlePath, copiedAt: date)
-        if let existing = clips.firstIndex(where: { $0.text == text }) {
+        let clip = Clip(content: content, appName: appName, bundlePath: bundlePath, copiedAt: date)
+        if let existing = clips.firstIndex(where: { $0.content == content }) {
             clips.remove(at: existing)
         }
         clips.insert(clip, at: 0)
+        trimToLimits()
+        index = 0
+        return .recorded
+    }
+
+    mutating func trimToLimits(imageByteLimit: Int = Self.maxImageHistoryBytes) {
         if clips.count > Self.capacity {
             clips.removeLast(clips.count - Self.capacity)
         }
-        index = 0
-        return .recorded
+        var imageBytes = clips.reduce(0) { $0 + ($1.image?.pngData.count ?? 0) }
+        while imageBytes > imageByteLimit, let last = clips.popLast() {
+            imageBytes -= last.image?.pngData.count ?? 0
+        }
+        index = clips.isEmpty ? 0 : min(index, clips.count - 1)
     }
 
     public var current: Clip? {
@@ -135,11 +184,12 @@ public struct ClipStore: Equatable {
 
     public func menuItems() -> [(index: Int, title: String)] {
         clips.prefix(Self.menuCount).enumerated().map { offset, clip in
-            (offset, Self.menuTitle(clip.text))
+            (offset, clip.image?.title ?? Self.menuTitle(clip.text))
         }
     }
 
     public func bezelText() -> String {
+        if let image = current?.image { return image.title }
         guard let text = current?.text else { return "" }
         if text.count <= Self.bezelPreviewLength { return text }
         return String(text.prefix(Self.bezelPreviewLength))
@@ -183,18 +233,60 @@ public struct ClipStore: Equatable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(Snapshot.self, from: data)
-        return ClipStore(clips: snapshot.clips, sticky: snapshot.sticky, paused: snapshot.paused)
+        let images = url.deletingLastPathComponent().appendingPathComponent("images", isDirectory: true)
+        var clips: [Clip] = []
+        var imageBytes = 0
+        for stored in snapshot.clips.prefix(Self.capacity) {
+            guard let clip = stored.clip(images: images) else { continue }
+            imageBytes += clip.image?.pngData.count ?? 0
+            if imageBytes > Self.maxImageHistoryBytes { break }
+            clips.append(clip)
+        }
+        return ClipStore(clips: clips, sticky: snapshot.sticky, paused: snapshot.paused)
     }
 
     public func save(to url: URL) throws {
         let directory = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let images = directory.appendingPathComponent("images", isDirectory: true)
+        let activeImages = clips.compactMap(\.image)
+        if !activeImages.isEmpty {
+            try manager.createDirectory(at: images, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            for image in activeImages {
+                let imageURL = images.appendingPathComponent(image.filename)
+                if !manager.fileExists(atPath: imageURL.path) {
+                    try Self.writePrivate(image.pngData, to: imageURL)
+                }
+            }
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(Snapshot(clips: clips, sticky: sticky, paused: paused))
+        let data = try encoder.encode(Snapshot(clips: clips.map(StoredClip.init), sticky: sticky, paused: paused))
+        try Self.writePrivate(data, to: url)
+
+        // A malformed history backup may still reference these files. Keep its assets for recovery.
+        let hasBackup = try manager.contentsOfDirectory(atPath: directory.path)
+            .contains { $0.hasPrefix("\(url.lastPathComponent).unreadable-") }
+        if !hasBackup, manager.fileExists(atPath: images.path) {
+            let retained = Set(activeImages.map(\.filename))
+            for file in try manager.contentsOfDirectory(at: images, includingPropertiesForKeys: nil) {
+                if file.pathExtension == "png", !retained.contains(file.lastPathComponent) {
+                    try manager.removeItem(at: file)
+                }
+            }
+        }
+    }
+
+    private static func writePrivate(_ data: Data, to url: URL) throws {
+        let directory = url.deletingLastPathComponent()
         let temporary = directory.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
-        try data.write(to: temporary, options: .atomic)
+        guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary)
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
         } else {
@@ -205,7 +297,52 @@ public struct ClipStore: Equatable {
 }
 
 private struct Snapshot: Codable, Equatable {
-    var clips: [Clip]
+    var clips: [StoredClip]
     var sticky: Bool
     var paused: Bool
+}
+
+private struct StoredClip: Codable, Equatable {
+    var text: String?
+    var image: StoredImage?
+    var appName: String
+    var bundlePath: String?
+    var copiedAt: Date
+
+    init(_ clip: Clip) {
+        if let image = clip.image {
+            self.image = StoredImage(identifier: image.identifier, pixelWidth: image.pixelWidth, pixelHeight: image.pixelHeight)
+        } else {
+            text = clip.text
+        }
+        appName = clip.appName
+        bundlePath = clip.bundlePath
+        copiedAt = clip.copiedAt
+    }
+
+    func clip(images: URL) -> Clip? {
+        let content: ClipContent
+        if let image {
+            guard image.identifier.count == 64,
+                  image.identifier.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+            let url = images.appendingPathComponent("\(image.identifier).png")
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int,
+                  size <= ClipImage.maxPNGBytes,
+                  let data = try? Data(contentsOf: url), let loaded = ClipImage.fromStoredPNG(data),
+                  loaded.identifier == image.identifier,
+                  loaded.pixelWidth == image.pixelWidth, loaded.pixelHeight == image.pixelHeight else { return nil }
+            content = .image(loaded)
+        } else if let text, !text.isEmpty, text.count <= ClipStore.maxClipLength {
+            content = .text(text)
+        } else {
+            return nil
+        }
+        return Clip(content: content, appName: appName, bundlePath: bundlePath, copiedAt: copiedAt)
+    }
+}
+
+private struct StoredImage: Codable, Equatable {
+    var identifier: String
+    var pixelWidth: Int
+    var pixelHeight: Int
 }

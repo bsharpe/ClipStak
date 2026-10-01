@@ -85,6 +85,7 @@ private final class BezelView: NSView {
     private let appLabel = NSTextField(labelWithString: "")
     private let dateLabel = NSTextField(labelWithString: "")
     private let body = NSTextField(wrappingLabelWithString: "")
+    private let imagePreview = NSImageView()
     private let positionLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "")
 
@@ -95,6 +96,8 @@ private final class BezelView: NSView {
         layer?.cornerRadius = 22
 
         icon.imageScaling = .scaleProportionallyUpOrDown
+        imagePreview.imageScaling = .scaleProportionallyUpOrDown
+        imagePreview.isHidden = true
         for label in [appLabel, dateLabel, body, positionLabel, hintLabel] {
             label.textColor = .white
             label.drawsBackground = false
@@ -118,7 +121,7 @@ private final class BezelView: NSView {
         hintLabel.textColor = NSColor.white.withAlphaComponent(0.55)
         hintLabel.alignment = .center
 
-        for view in [icon, appLabel, dateLabel, body, positionLabel, hintLabel] {
+        for view in [icon, appLabel, dateLabel, body, imagePreview, positionLabel, hintLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -135,6 +138,10 @@ private final class BezelView: NSView {
             body.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             body.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             body.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 12),
+            imagePreview.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            imagePreview.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            imagePreview.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 12),
+            imagePreview.bottomAnchor.constraint(equalTo: positionLabel.topAnchor, constant: -8),
             hintLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             hintLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
@@ -148,8 +155,19 @@ private final class BezelView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func update(clip: Clip?, position: String, hint: String) {
+        imagePreview.image = nil
+        imagePreview.isHidden = true
+        body.isHidden = false
         if let clip {
-            body.stringValue = String(clip.text.prefix(ClipStore.bezelPreviewLength))
+            if let image = clip.image, let thumbnail = image.thumbnail(maxPixelSize: 936) {
+                imagePreview.image = NSImage(cgImage: thumbnail, size: .zero)
+                imagePreview.setAccessibilityLabel(image.title)
+                imagePreview.isHidden = false
+                body.isHidden = true
+                body.stringValue = ""
+            } else {
+                body.stringValue = clip.image?.title ?? String(clip.text.prefix(ClipStore.bezelPreviewLength))
+            }
             appLabel.stringValue = clip.appName.isEmpty ? "Clipboard" : clip.appName
             dateLabel.stringValue = BezelView.dateFormatter.string(from: clip.copiedAt)
             if let path = clip.bundlePath {

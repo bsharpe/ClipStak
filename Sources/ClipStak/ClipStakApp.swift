@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import ClipStakCore
+import ClipStakClipboard
 
 final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var store = ClipStore()
@@ -183,6 +184,12 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let entry = NSMenuItem(title: item.title, action: #selector(pasteMenuItem(_:)), keyEquivalent: "")
                 entry.target = self
                 entry.tag = item.index
+                if let thumbnail = store.clips[item.index].image?.thumbnail(maxPixelSize: 36) {
+                    let scale = 18 / CGFloat(max(thumbnail.width, thumbnail.height))
+                    entry.image = NSImage(cgImage: thumbnail, size: NSSize(
+                        width: CGFloat(thumbnail.width) * scale, height: CGFloat(thumbnail.height) * scale
+                    ))
+                }
                 menu.addItem(entry)
             }
         }
@@ -388,7 +395,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func pasteCurrent() {
-        guard let text = store.current?.text else {
+        guard let content = store.current?.content else {
             suppressPaste = true
             hideBezel()
             return
@@ -396,7 +403,10 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         suppressPaste = true
         hideBezel()
-        writeToPasteboard(text)
+        guard writeToPasteboard(content) else {
+            notify("The selected clip could not be copied to the clipboard.")
+            return
+        }
         let expectedChangeCount = NSPasteboard.general.changeCount
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             guard ClipboardPolicy.canCompletePaste(
@@ -409,11 +419,11 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func writeToPasteboard(_ text: String) {
+    private func writeToPasteboard(_ content: ClipContent) -> Bool {
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard ClipPasteboard.write(content, to: pasteboard) else { return false }
         ownChangeCount = pasteboard.changeCount
+        return true
     }
 
     private func startWatchingPasteboard() {
@@ -425,11 +435,10 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if count == lastCount { return }
             lastCount = count
             if count == self.ownChangeCount { return }
-            guard ClipboardPolicy.shouldCapture(types: pasteboard.types?.map(\.rawValue) ?? []) else { return }
-            guard let text = pasteboard.string(forType: .string) else { return }
+            guard !self.store.paused, let content = ClipPasteboard.read(from: pasteboard) else { return }
             let front = NSWorkspace.shared.frontmostApplication
             let result = self.store.record(
-                text: text,
+                content: content,
                 appName: front?.localizedName ?? "",
                 bundlePath: front?.bundleURL?.path,
                 at: Date()
