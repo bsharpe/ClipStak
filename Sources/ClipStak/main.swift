@@ -1,6 +1,6 @@
 import AppKit
 
-private let appDelegate = StackApp()
+private let appDelegate = ClipStakApp()
 
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)

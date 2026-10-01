@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>Stack</string>
+	<string>ClipStak</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.bsharpe.stack</string>
+	<string>com.bsharpe.clipstak</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Stack</string>
+	<string>ClipStak</string>
 	<key>CFBundleDisplayName</key>
-	<string>Stack</string>
+	<string>ClipStak</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,6 +27,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Stack posts a notification if it has to start again after stopping.</string>
+	<string>ClipStak posts a notification if it has to start again after stopping.</string>
 </dict>
 </plist>

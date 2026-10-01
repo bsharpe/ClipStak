@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "Stack",
+    name: "ClipStak",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Stack", targets: ["Stack"])
+        .executable(name: "ClipStak", targets: ["ClipStak"])
     ],
     targets: [
-        .target(name: "StackCore"),
+        .target(name: "ClipStakCore"),
         .executableTarget(
-            name: "Stack",
-            dependencies: ["StackCore"],
+            name: "ClipStak",
+            dependencies: ["ClipStakCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),
                 .linkedFramework("ApplicationServices"),
             ]
         ),
-        .testTarget(name: "StackCoreTests", dependencies: ["StackCore"]),
+        .testTarget(name: "ClipStakCoreTests", dependencies: ["ClipStakCore"]),
     ]
 )

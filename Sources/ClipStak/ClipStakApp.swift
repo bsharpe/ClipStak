@@ -1,9 +1,9 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
-import StackCore
+import ClipStakCore
 
-final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var store = ClipStore()
     private let hotkey = Hotkey()
     private let bezel = BezelPanel()
@@ -15,7 +15,7 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var suppressPaste = false
     private var ownChangeCount: Int?
     private let supportURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Stack", isDirectory: true)
+        .appendingPathComponent("Library/Application Support/ClipStak", isDirectory: true)
     private var historyURL: URL {
         supportURL.appendingPathComponent("history.json")
     }
@@ -44,11 +44,11 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startWatchingPasteboard()
         promptForAccessibility()
         if restarted {
-            notify("Stack stopped and is running again.")
+            notify("ClipStak stopped and is running again.")
         }
-        if ProcessInfo.processInfo.environment["STACK_SHOW_BEZEL"] == "1" {
+        if ProcessInfo.processInfo.environment["CLIPSTAK_SHOW_BEZEL"] == "1" {
             bezel.show(
-                clip: Clip(text: "Hold shift-command-V, then release to paste.", appName: "Stack", bundlePath: nil, copiedAt: Date()),
+                clip: Clip(text: "Hold shift-command-V, then release to paste.", appName: "ClipStak", bundlePath: nil, copiedAt: Date()),
                 position: "1 of 1",
                 hint: "release ⌘ to paste  ·  esc cancels"
             )
@@ -103,7 +103,7 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func installStatusItem() {
-        let autosave = "Stack"
+        let autosave = "ClipStak"
         let positionKey = "NSStatusItem Preferred Position \(autosave)"
         // Preferred position increases toward the left. 280 sits just right of
         // Flycut (295), clear of the notch overflow. Leave a position the user dragged.
@@ -116,7 +116,7 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.isVisible = true
         statusItem.button?.image = StatusIcon.image(paused: store.paused)
         statusItem.button?.imageScaling = .scaleProportionallyDown
-        statusItem.button?.toolTip = "Stack — hold ⇧⌘V, release to paste"
+        statusItem.button?.toolTip = "ClipStak — hold ⇧⌘V, release to paste"
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -163,7 +163,7 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clear = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
         clear.target = self
         menu.addItem(clear)
-        menu.addItem(NSMenuItem(title: "Quit Stack", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit ClipStak", action: #selector(quit), keyEquivalent: "q"))
         menu.items.last?.target = self
     }
 
@@ -182,7 +182,7 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Clear clipboard history?"
-        alert.informativeText = "The clips Stack has saved will be deleted."
+        alert.informativeText = "The clips ClipStak has saved will be deleted."
         alert.addButton(withTitle: "Clear")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -398,12 +398,12 @@ final class StackApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options = [key: true] as CFDictionary
         if !AXIsProcessTrustedWithOptions(options) {
-            notify("Stack needs Accessibility permission to paste.")
+            notify("ClipStak needs Accessibility permission to paste.")
         }
     }
 
     private func notify(_ message: String) {
-        let script = "display notification \"\(message)\" with title \"Stack\""
+        let script = "display notification \"\(message)\" with title \"ClipStak\""
         NSAppleScript(source: script)?.executeAndReturnError(nil)
     }
 }

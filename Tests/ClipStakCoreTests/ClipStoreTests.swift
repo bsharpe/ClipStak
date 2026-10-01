@@ -1,5 +1,5 @@
 import XCTest
-@testable import StackCore
+@testable import ClipStakCore
 
 final class ClipStoreTests: XCTestCase {
     func testANewCopyBecomesTheClipYouSeeFirst() {
@@ -116,7 +116,7 @@ final class ClipStoreTests: XCTestCase {
         store.record(text: "alpha", appName: "Code", bundlePath: "/Applications/Visual Studio Code.app", at: date(10))
         store.paused = true
         store.sticky = true
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("stack-test-\(UUID().uuidString).json")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("clipstak-test-\(UUID().uuidString).json")
         try store.save(to: url)
         let loaded = ClipStore.load(from: url)
         XCTAssertEqual(loaded, store)

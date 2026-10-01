@@ -1,7 +1,7 @@
 import AppKit
-import StackCore
+import ClipStakCore
 
-/// The dark card Flycut calls the bezel. It can take keys without activating Stack,
+/// The dark card Flycut calls the bezel. It can take keys without activating ClipStak,
 /// so the app underneath stays the paste target.
 final class BezelPanel: NSPanel {
     var onKey: ((NSEvent) -> Void)?
