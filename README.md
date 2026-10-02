@@ -1,5 +1,7 @@
 # ClipStak
 
+<img src="Support/ClipStak.png" alt="ClipStak icon" width="128">
+
 ClipStak is a menu-bar clipboard history for macOS. Copy as usual. Hold Shift-Command-V to show the newest clip, press the shortcut again to walk older, and release to paste into the app you were using. Esc cancels.
 
 The release is an Apple silicon app for macOS 14 or later. It is not notarized.
