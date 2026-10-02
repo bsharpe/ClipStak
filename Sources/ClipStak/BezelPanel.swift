@@ -91,9 +91,7 @@ private final class BezelView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.82).cgColor
-        layer?.cornerRadius = 22
+        applyBezelBackground(to: self)
 
         icon.imageScaling = .scaleProportionallyUpOrDown
         imagePreview.imageScaling = .scaleProportionallyUpOrDown
@@ -154,29 +152,8 @@ private final class BezelView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    // Upholstery piping in the app icon's red. The cord is drawn as nested strokes shaded like a
-    // lit cylinder: dark at the rim, the icon red on its flank, a soft highlight on the ridge.
     override func draw(_ dirtyRect: NSRect) {
-        let seam = NSBezierPath(roundedRect: bounds.insetBy(dx: 9.5, dy: 9.5), xRadius: 12.5, yRadius: 12.5)
-        seam.lineWidth = 1.5
-        NSColor(white: 0, alpha: 0.4).setStroke()
-        seam.stroke()
-
-        let red = NSColor(srgbRed: 0.86, green: 0.16, blue: 0.18, alpha: 1)
-        let rim = NSColor(srgbRed: 0.36, green: 0.03, blue: 0.05, alpha: 1)
-        let cord = NSBezierPath(roundedRect: bounds.insetBy(dx: 4.5, dy: 4.5), xRadius: 17.5, yRadius: 17.5)
-        for step in 0..<12 {
-            let angle = CGFloat.pi / 2 * CGFloat(12 - step) / 12
-            let light = cos(angle)
-            let path = cord.copy() as! NSBezierPath
-            path.transform(using: AffineTransform(translationByX: 0, byY: light))
-            path.lineWidth = 9 * sin(angle)
-            let color = light < 0.75
-                ? rim.blended(withFraction: light / 0.75, of: red)
-                : red.blended(withFraction: (light - 0.75) / 0.25 * 0.3, of: .white)
-            color?.setStroke()
-            path.stroke()
-        }
+        drawPiping(in: bounds)
     }
 
     func update(clip: Clip?, position: String, hint: String) {
@@ -194,7 +171,7 @@ private final class BezelView: NSView {
                 body.stringValue = clip.image?.title ?? String(clip.text.prefix(ClipStore.bezelPreviewLength))
             }
             appLabel.stringValue = clip.appName.isEmpty ? "Clipboard" : clip.appName
-            dateLabel.stringValue = BezelView.ageFormatter.localizedString(for: clip.copiedAt, relativeTo: Date())
+            dateLabel.stringValue = clipAgeFormatter.localizedString(for: clip.copiedAt, relativeTo: Date())
             if let path = clip.bundlePath {
                 icon.image = NSWorkspace.shared.icon(forFile: path)
             } else {
@@ -209,11 +186,43 @@ private final class BezelView: NSView {
         positionLabel.stringValue = position
         hintLabel.stringValue = hint
     }
-
-    // "5 minutes ago", "yesterday", "last week".
-    private static let ageFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.dateTimeStyle = .named
-        return formatter
-    }()
 }
+
+/// The dark translucent card shared by the bezel and the contact sheet.
+func applyBezelBackground(to view: NSView) {
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.82).cgColor
+    view.layer?.cornerRadius = 22
+}
+
+/// Upholstery piping in the app icon's red. The cord is drawn as nested strokes shaded like a
+/// lit cylinder: dark at the rim, the icon red on its flank, a soft highlight on the ridge.
+func drawPiping(in bounds: NSRect) {
+    let seam = NSBezierPath(roundedRect: bounds.insetBy(dx: 9.5, dy: 9.5), xRadius: 12.5, yRadius: 12.5)
+    seam.lineWidth = 1.5
+    NSColor(white: 0, alpha: 0.4).setStroke()
+    seam.stroke()
+
+    let red = NSColor(srgbRed: 0.86, green: 0.16, blue: 0.18, alpha: 1)
+    let rim = NSColor(srgbRed: 0.36, green: 0.03, blue: 0.05, alpha: 1)
+    let cord = NSBezierPath(roundedRect: bounds.insetBy(dx: 4.5, dy: 4.5), xRadius: 17.5, yRadius: 17.5)
+    for step in 0..<12 {
+        let angle = CGFloat.pi / 2 * CGFloat(12 - step) / 12
+        let light = cos(angle)
+        let path = cord.copy() as! NSBezierPath
+        path.transform(using: AffineTransform(translationByX: 0, byY: light))
+        path.lineWidth = 9 * sin(angle)
+        let color = light < 0.75
+            ? rim.blended(withFraction: light / 0.75, of: red)
+            : red.blended(withFraction: (light - 0.75) / 0.25 * 0.3, of: .white)
+        color?.setStroke()
+        path.stroke()
+    }
+}
+
+/// "5 minutes ago", "yesterday", "last week".
+let clipAgeFormatter: RelativeDateTimeFormatter = {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.dateTimeStyle = .named
+    return formatter
+}()

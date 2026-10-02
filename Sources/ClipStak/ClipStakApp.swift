@@ -9,6 +9,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var store = ClipStore()
     private let hotkey = Hotkey()
     private let bezel = BezelPanel()
+    private let sheet = ContactSheetPanel()
     private var statusItem: NSStatusItem!
     private var watcher: Timer?
     private var saveRetry: Timer?
@@ -17,6 +18,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var localFlagsMonitor: Any?
     private var modifierPoll: Timer?
     private var bezelVisible = false
+    private var sheetVisible = false
     private var suppressPaste = false
     private var releaseArmed = false
     private var pasteGeneration = 0
@@ -51,6 +53,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installStatusItem()
         installHotkey()
         installBezel()
+        installSheet()
         startWatchingPasteboard()
         refreshAccessibilityStatus()
         if restarted {
@@ -187,6 +190,9 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hint = NSMenuItem(title: "Hold ⇧⌘V, release to paste", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
+        let sheetHint = NSMenuItem(title: "Press ⌃⌘V to pick from all clips", action: nil, keyEquivalent: "")
+        sheetHint.isEnabled = false
+        menu.addItem(sheetHint)
         menu.addItem(.separator())
         if store.clips.isEmpty {
             let empty = NSMenuItem(title: "Nothing copied yet", action: nil, keyEquivalent: "")
@@ -259,8 +265,11 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func installHotkey() {
-        hotkey.onPress = { [weak self] in
-            self?.hotkeyPressed()
+        hotkey.onPress = { [weak self] chord in
+            switch chord {
+            case .bezel: self?.hotkeyPressed()
+            case .sheet: self?.toggleSheet()
+            }
         }
         hotkey.install()
     }
@@ -274,7 +283,40 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bezel.onDoubleClick = { [weak self] in self?.pasteCurrent() }
     }
 
+    private func installSheet() {
+        sheet.onChoose = { [weak self] index in
+            guard let self else { return }
+            store.select(index)
+            hideSheet()
+            pasteCurrent()
+        }
+        sheet.onClose = { [weak self] in self?.hideSheet() }
+    }
+
+    private func toggleSheet() {
+        guard !sheetVisible else {
+            hideSheet()
+            return
+        }
+        cancelPendingPaste()
+        if bezelVisible {
+            suppressPaste = true
+            hideBezel()
+        }
+        rememberPasteTarget()
+        sheetVisible = true
+        sheet.show(clips: store.clips, selected: 0)
+    }
+
+    private func hideSheet() {
+        // orderOut resigns key, which reports close again.
+        guard sheetVisible else { return }
+        sheetVisible = false
+        sheet.orderOut(nil)
+    }
+
     private func hotkeyPressed() {
+        hideSheet()
         if !bezelVisible {
             showBezel()
         } else {
@@ -541,7 +583,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 targetPID: target.processIdentifier,
                 frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                 clipStakPID: ProcessInfo.processInfo.processIdentifier,
-                bezelIsKey: self.bezel.isKeyWindow,
+                bezelIsKey: self.bezel.isKeyWindow || self.sheet.isKeyWindow,
                 modifiers: self.hardwareModifiers()
             )
             switch action {

@@ -1,10 +1,16 @@
 import Carbon.HIToolbox
 import Foundation
 
-/// Shift-Command-V, using the ANSI V key position so the chord survives Dvorak and other layouts.
+/// Shift-Command-V for the bezel and Control-Command-V for the contact sheet, using the
+/// ANSI V key position so the chords survive Dvorak and other layouts.
 final class Hotkey {
-    var onPress: () -> Void = {}
-    private var hotKey: EventHotKeyRef?
+    enum Chord: UInt32 {
+        case bezel = 1
+        case sheet = 2
+    }
+
+    var onPress: (Chord) -> Void = { _ in }
+    private var hotKeys: [EventHotKeyRef?] = []
     private var handler: EventHandlerRef?
 
     func install() {
@@ -21,20 +27,35 @@ final class Hotkey {
             context,
             &handler
         )
-        let id = EventHotKeyID(signature: OSType(0x5354414B), id: 1)
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_V),
-            UInt32(cmdKey | shiftKey),
-            id,
-            GetApplicationEventTarget(),
-            0,
-            &hotKey
-        )
+        for (chord, modifiers) in [(Chord.bezel, cmdKey | shiftKey), (Chord.sheet, cmdKey | controlKey)] {
+            var hotKey: EventHotKeyRef?
+            let id = EventHotKeyID(signature: OSType(0x5354414B), id: chord.rawValue)
+            RegisterEventHotKey(
+                UInt32(kVK_ANSI_V),
+                UInt32(modifiers),
+                id,
+                GetApplicationEventTarget(),
+                0,
+                &hotKey
+            )
+            hotKeys.append(hotKey)
+        }
     }
 }
 
-private let hotkeyCallback: EventHandlerUPP = { _, _, userData in
-    guard let userData else { return noErr }
-    Unmanaged<Hotkey>.fromOpaque(userData).takeUnretainedValue().onPress()
+private let hotkeyCallback: EventHandlerUPP = { _, event, userData in
+    guard let event, let userData else { return noErr }
+    var id = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &id
+    )
+    guard status == noErr, let chord = Hotkey.Chord(rawValue: id.id) else { return noErr }
+    Unmanaged<Hotkey>.fromOpaque(userData).takeUnretainedValue().onPress(chord)
     return noErr
 }
