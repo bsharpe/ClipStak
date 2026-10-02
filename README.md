@@ -1,6 +1,6 @@
 # <img src="Support/ClipStak.png" alt="" width="40" align="absmiddle"> ClipStak
 
-![Demo: copy three snippets, hold Shift-Command-V to show the newest, press V again to step back, release to paste, then open the menu-bar history and Option-click to pause capture](Support/demo.gif)
+![Demo: copy three snippets, hold Shift-Command-V and press V again to step back, release to paste, press Control-Command-V to pick an image from the grid of all clips and paste it, then open the menu-bar history and Option-click to pause capture](Support/demo.gif)
 
 ClipStak is a menu-bar clipboard history for macOS. Copy as usual. Hold Shift-Command-V to show the newest clip, press the shortcut again to walk older, and release to paste into the app you were using. Esc cancels. Control-Command-V shows every clip in a grid instead: click one, or move with the arrow keys and press Return, to paste it. Esc closes the grid.
 
