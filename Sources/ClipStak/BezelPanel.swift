@@ -67,8 +67,8 @@ final class BezelPanel: NSPanel {
         update(clip: clip, position: position, hint: hint)
         placeOnMouseScreen()
         alphaValue = 0
-        orderFrontRegardless()
-        makeKey()
+        // Use the same nonactivating panel presentation as Flycut.
+        makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             animator().alphaValue = 1

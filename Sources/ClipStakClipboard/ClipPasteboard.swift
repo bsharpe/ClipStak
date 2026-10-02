@@ -14,6 +14,15 @@ public enum ClipPasteboard {
         return pasteboard.string(forType: .string).map(ClipContent.text)
     }
 
+    public static func contains(_ content: ClipContent, on pasteboard: NSPasteboard) -> Bool {
+        switch content {
+        case .text(let text):
+            return pasteboard.string(forType: .string) == text
+        case .image(let image):
+            return pasteboard.data(forType: .png) == image.pngData
+        }
+    }
+
     public static func write(_ content: ClipContent, to pasteboard: NSPasteboard) -> Bool {
         let item = NSPasteboardItem()
         switch content {

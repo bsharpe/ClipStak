@@ -63,6 +63,8 @@ final class ClipPasteboardTests: XCTestCase {
     func testTextCaptureAndPasteStillWork() {
         XCTAssertTrue(ClipPasteboard.write(.text("hello"), to: pasteboard))
         XCTAssertEqual(ClipPasteboard.read(from: pasteboard), .text("hello"))
+        XCTAssertTrue(ClipPasteboard.contains(.text("hello"), on: pasteboard))
+        XCTAssertFalse(ClipPasteboard.contains(.text("other"), on: pasteboard))
         XCTAssertNil(pasteboard.data(forType: .png))
         pasteboard.clearContents()
         XCTAssertNil(ClipPasteboard.read(from: pasteboard))

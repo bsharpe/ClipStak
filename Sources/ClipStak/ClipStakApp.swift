@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon.HIToolbox
 import ClipStakCore
 import ClipStakClipboard
+import os
 
 final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var store = ClipStore()
@@ -14,8 +15,13 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var warnedSaveFailure = false
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
+    private var modifierPoll: Timer?
     private var bezelVisible = false
     private var suppressPaste = false
+    private var releaseArmed = false
+    private var pasteGeneration = 0
+    private var pasteTarget: NSRunningApplication?
+    private let pasteLog = Logger(subsystem: "com.bsharpe.clipstak", category: "Paste")
     private var ownChangeCount: Int?
     private let supportURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/ClipStak", isDirectory: true)
@@ -46,7 +52,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installHotkey()
         installBezel()
         startWatchingPasteboard()
-        promptForAccessibility()
+        refreshAccessibilityStatus()
         if restarted {
             notify("ClipStak stopped and is running again.")
         }
@@ -157,6 +163,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        rememberPasteTarget()
         if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
             menu.cancelTracking()
             togglePause()
@@ -165,6 +172,12 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if !CGPreflightPostEventAccess() {
+            let permission = NSMenuItem(title: "Enable Automatic Paste…", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+            permission.target = self
+            menu.addItem(permission)
+            menu.addItem(.separator())
+        }
         if history.lastError != nil {
             let warning = NSMenuItem(title: "History is not being saved", action: nil, keyEquivalent: "")
             warning.isEnabled = false
@@ -270,12 +283,21 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showBezel(armPaste: Bool = true) {
+        cancelPendingPaste()
+        rememberPasteTarget()
         suppressPaste = !armPaste
         bezelVisible = true
         bezel.show(clip: store.current, position: store.positionLabel, hint: hint)
         installFlagMonitors()
-        let modifiers = NSEvent.modifierFlags.intersection([.command, .shift, .option, .control])
-        if armPaste, modifiers.isEmpty {
+        let hardware = hardwareModifiers()
+        releaseArmed = !hardware.isEmpty
+        if ReleasePaste.shouldPaste(
+            reported: hardware,
+            hardware: hardware,
+            bezelVisible: true,
+            suppressPaste: suppressPaste,
+            sticky: store.sticky
+        ) {
             modifiersReleased()
         }
     }
@@ -291,8 +313,18 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func hideBezel() {
         bezelVisible = false
+        releaseArmed = false
         removeFlagMonitors()
         bezel.orderOut(nil)
+    }
+
+    private func cancelPendingPaste() {
+        pasteGeneration += 1
+    }
+
+    private func rememberPasteTarget() {
+        let app = NSWorkspace.shared.frontmostApplication
+        pasteTarget = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
     }
 
     private func installFlagMonitors() {
@@ -304,9 +336,16 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.flagsChanged(event)
         }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.modifierPollFired()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        modifierPoll = timer
     }
 
     private func removeFlagMonitors() {
+        modifierPoll?.invalidate()
+        modifierPoll = nil
         if let localFlagsMonitor {
             NSEvent.removeMonitor(localFlagsMonitor)
             self.localFlagsMonitor = nil
@@ -318,15 +357,52 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func flagsChanged(_ event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        if modifiers.isEmpty {
-            modifiersReleased()
+        let hardware = hardwareModifiers()
+        if !hardware.isEmpty { releaseArmed = true }
+        guard ReleasePaste.shouldPaste(
+            reported: heldModifiers(event.modifierFlags),
+            hardware: hardware,
+            bezelVisible: bezelVisible,
+            suppressPaste: suppressPaste,
+            sticky: store.sticky
+        ) else { return }
+        modifiersReleased()
+    }
+
+    private func modifierPollFired() {
+        let hardware = hardwareModifiers()
+        if !hardware.isEmpty {
+            releaseArmed = true
+            return
         }
+        // A tap pastes from showBezel. The poll only finishes a hold we have seen.
+        guard releaseArmed else { return }
+        guard ReleasePaste.shouldPaste(
+            reported: hardware,
+            hardware: hardware,
+            bezelVisible: bezelVisible,
+            suppressPaste: suppressPaste,
+            sticky: store.sticky
+        ) else { return }
+        modifiersReleased()
     }
 
     private func modifiersReleased() {
-        guard bezelVisible, !suppressPaste, !store.sticky else { return }
         pasteCurrent()
+    }
+
+    private func heldModifiers(_ flags: NSEvent.ModifierFlags) -> HeldModifiers {
+        var held = HeldModifiers()
+        if flags.contains(.command) { held.insert(.command) }
+        if flags.contains(.shift) { held.insert(.shift) }
+        if flags.contains(.option) { held.insert(.option) }
+        if flags.contains(.control) { held.insert(.control) }
+        return held
+    }
+
+    private func hardwareModifiers() -> HeldModifiers {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        return heldModifiers(NSEvent.ModifierFlags(rawValue: UInt(flags.rawValue)))
     }
 
     private func moveOlder() {
@@ -348,6 +424,7 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch event.keyCode {
         case UInt16(kVK_Escape):
             suppressPaste = true
+            cancelPendingPaste()
             hideBezel()
         case UInt16(kVK_Return):
             pasteCurrent()
@@ -355,11 +432,13 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             store.moveCurrentToFront()
             persist()
             suppressPaste = true
+            cancelPendingPaste()
             hideBezel()
         case UInt16(kVK_Delete), UInt16(kVK_ForwardDelete):
             _ = store.deleteCurrent()
             persist()
             suppressPaste = true
+            cancelPendingPaste()
             hideBezel()
         case UInt16(kVK_UpArrow), UInt16(kVK_LeftArrow):
             moveNewer()
@@ -395,27 +474,94 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func pasteCurrent() {
+        pasteLog.notice("Paste requested")
         guard let content = store.current?.content else {
             suppressPaste = true
             hideBezel()
             return
         }
-        let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         suppressPaste = true
-        hideBezel()
         guard writeToPasteboard(content) else {
+            hideBezel()
             notify("The selected clip could not be copied to the clipboard.")
             return
         }
+        // Flycut delays hideApp and fakeCommandV until the release has settled.
+        // Keep that delay, then allow the destination to regain keyboard focus.
+        cancelPendingPaste()
+        let generation = pasteGeneration
+        let target = pasteTarget
         let expectedChangeCount = NSPasteboard.general.changeCount
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, generation == self.pasteGeneration else { return }
+            self.hideBezel()
+            NSApp.hide(nil)
+            guard self.refreshAccessibilityStatus() else {
+                self.pasteLog.error("Automatic paste blocked: macOS has not authorized event posting")
+                self.notify("Clip copied. Allow ClipStak in System Settings → Privacy & Security → Accessibility to paste automatically.")
+                return
+            }
+            guard let target, !target.isTerminated else {
+                self.pasteLog.error("Automatic paste cancelled: no destination application")
+                return
+            }
+            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if frontmostPID == target.processIdentifier || frontmostPID == ProcessInfo.processInfo.processIdentifier {
+                target.activate(options: [])
+            }
+            self.completePaste(
+                content: content,
+                expectedChangeCount: expectedChangeCount,
+                target: target,
+                generation: generation,
+                deadline: ProcessInfo.processInfo.systemUptime + 1
+            )
+        }
+    }
+
+    private func completePaste(
+        content: ClipContent,
+        expectedChangeCount: Int,
+        target: NSRunningApplication,
+        generation: Int,
+        deadline: TimeInterval
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, generation == self.pasteGeneration, !target.isTerminated else { return }
+            let pasteboard = NSPasteboard.general
             guard ClipboardPolicy.canCompletePaste(
                 expectedChangeCount: expectedChangeCount,
-                currentChangeCount: NSPasteboard.general.changeCount,
-                targetPID: targetPID,
-                frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier
-            ) else { return }
-            postCommandV()
+                currentChangeCount: pasteboard.changeCount,
+                clipboardStillHoldsClip: ClipPasteboard.contains(content, on: pasteboard)
+            ) else {
+                self.pasteLog.notice("Automatic paste cancelled: clipboard changed")
+                return
+            }
+            let action = PasteReadiness.action(
+                targetPID: target.processIdentifier,
+                frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                clipStakPID: ProcessInfo.processInfo.processIdentifier,
+                bezelIsKey: self.bezel.isKeyWindow,
+                modifiers: self.hardwareModifiers()
+            )
+            switch action {
+            case .paste:
+                if postCommandVEvent() {
+                    self.pasteLog.notice("Command-V posted to restored destination")
+                } else {
+                    self.pasteLog.error("Command-V could not be created")
+                }
+            case .cancel:
+                self.pasteLog.notice("Automatic paste cancelled: destination changed")
+                return
+            case .wait:
+                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                    self.pasteLog.error("Automatic paste timed out waiting for focus or modifier release")
+                    return
+                }
+                self.completePaste(content: content, expectedChangeCount: expectedChangeCount,
+                                   target: target, generation: generation, deadline: deadline)
+            }
         }
     }
 
@@ -451,12 +597,23 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func promptForAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [key: true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(options) {
-            notify("ClipStak needs Accessibility permission to paste.")
+    @discardableResult
+    private func refreshAccessibilityStatus() -> Bool {
+        // These are passive checks. Never ask macOS to show its consent prompt
+        // on launch; an old TCC entry can remain enabled but reject a new signature.
+        let accessibility = AXIsProcessTrusted()
+        let posting = CGPreflightPostEventAccess()
+        pasteLog.notice("Permission status: Accessibility=\(accessibility, privacy: .public), event posting=\(posting, privacy: .public)")
+        if !posting {
+            statusItem.button?.toolTip = "ClipStak — allow Accessibility to paste automatically"
+        } else if history.lastError == nil {
+            statusItem.button?.toolTip = "ClipStak — hold ⇧⌘V, release to paste"
         }
+        return posting
+    }
+
+    @objc private func openAccessibilitySettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
 
     private func notify(_ message: String) {
@@ -465,17 +622,18 @@ final class ClipStakApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-private func postCommandV() {
-    guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+private func postCommandVEvent() -> Bool {
+    guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
     let key = CGKeyCode(kVK_ANSI_V)
     guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
-          let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return }
+          let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return false }
     // 0x8 is the physical Command key. Some apps ignore a chord that only sets the symbolic flag.
-    let flags = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x000008)
-    down.flags = flags
-    up.flags = flags
+    // Match Flycut's fakeKey: set Command on key-down only.
+    down.flags = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x000008)
+    up.flags = []
     down.post(tap: .cghidEventTap)
     up.post(tap: .cghidEventTap)
+    return true
 }
 
 private enum StatusIcon {

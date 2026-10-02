@@ -186,11 +186,58 @@ final class ClipStoreTests: XCTestCase {
         XCTAssertFalse(persistence.save(ClipStore()))
     }
 
-    func testPendingPasteRequiresTheSameAppAndClipboardContents() {
-        XCTAssertTrue(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: 100, frontmostPID: 100))
-        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 5, targetPID: 100, frontmostPID: 100))
-        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: 100, frontmostPID: 101))
-        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, targetPID: nil, frontmostPID: nil))
+    func testSyntheticPasteRunsWhenTheClipIsStillOnTheClipboard() {
+        // The bezel holds the key window, so whichever app is frontmost at release
+        // is the wrong reason to cancel. Cancelling leaves the clip on the clipboard
+        // and nothing in the window — the next manual Command-V is what inserts it.
+        XCTAssertTrue(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 4, clipboardStillHoldsClip: true))
+        XCTAssertTrue(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 5, clipboardStillHoldsClip: true))
+        XCTAssertFalse(ClipboardPolicy.canCompletePaste(expectedChangeCount: 4, currentChangeCount: 5, clipboardStillHoldsClip: false))
+    }
+
+    func testArrowKeysDoNotCountAsReleasingTheHotkeyWhileShiftAndCommandAreHeld() {
+        // flagsChanged during an arrow press can report no modifiers while the
+        // chord is still physically down. Pasting then swallows the real release.
+        XCTAssertFalse(ReleasePaste.shouldPaste(
+            reported: [],
+            hardware: [.command, .shift],
+            bezelVisible: true,
+            suppressPaste: false,
+            sticky: false
+        ))
+        XCTAssertTrue(ReleasePaste.shouldPaste(
+            reported: [],
+            hardware: [],
+            bezelVisible: true,
+            suppressPaste: false,
+            sticky: false
+        ))
+        XCTAssertFalse(ReleasePaste.shouldPaste(
+            reported: [],
+            hardware: [],
+            bezelVisible: true,
+            suppressPaste: false,
+            sticky: true
+        ))
+    }
+
+    func testPasteWaitsForKeyboardFocusEvenWhenTheDestinationIsAlreadyFrontmost() {
+        // A nonactivating panel leaves the editor frontmost while stealing its keys.
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: 10, clipStakPID: 20,
+                                            bezelIsKey: true, modifiers: []), .wait)
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: 20, clipStakPID: 20,
+                                            bezelIsKey: false, modifiers: []), .wait)
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: nil, clipStakPID: 20,
+                                            bezelIsKey: false, modifiers: []), .wait)
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: 10, clipStakPID: 20,
+                                            bezelIsKey: false, modifiers: [.shift]), .wait)
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: 10, clipStakPID: 20,
+                                            bezelIsKey: false, modifiers: []), .paste)
+    }
+
+    func testSwitchingAppsDuringThePasteDelayCancelsInsteadOfPastingIntoTheNewApp() {
+        XCTAssertEqual(PasteReadiness.action(targetPID: 10, frontmostPID: 30, clipStakPID: 20,
+                                            bezelIsKey: false, modifiers: []), .cancel)
     }
 
     func testFlycutHistoryImportsNewestFirstAndSkipsNonText() {

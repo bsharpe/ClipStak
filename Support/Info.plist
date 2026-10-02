@@ -14,6 +14,8 @@
 	<string>ClipStak</string>
 	<key>CFBundleDisplayName</key>
 	<string>ClipStak</string>
+	<key>CFBundleIconFile</key>
+	<string>ClipStak.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

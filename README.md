@@ -15,7 +15,9 @@ The release is an Apple silicon app for macOS 14 or later. It is not notarized.
    ```
 
 4. Open ClipStak. It has no window. A red icon with three white lines appears in the menu bar.
-5. Allow ClipStak in System Settings → Privacy & Security → Accessibility. Paste does nothing until that is on. Capture and the menu work without it.
+5. Allow ClipStak in System Settings → Privacy & Security → Accessibility. You can open this pane from ClipStak's **Enable Automatic Paste…** menu item. Paste does nothing until that is on. Capture and the menu work without it.
+
+If ClipStak is enabled there but automatic paste still does nothing after an update, remove its entry with the minus button, add the app you actually run with the plus button, and enable it again. Quit and reopen ClipStak afterward. A permission entry for an older unsigned build can remain enabled without authorizing the current signed app.
 
 History is kept in `~/Library/Application Support/ClipStak/history.json`. The menu shows the last 10 clips. Option-click the icon, or choose Pause Capture, before copying a password. Sticky Bezel, in the menu, keeps the card up until you press Return or Esc.
 
